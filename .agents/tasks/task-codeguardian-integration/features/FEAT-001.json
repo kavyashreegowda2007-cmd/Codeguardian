@@ -1,0 +1,32 @@
+{
+  "id": "FEAT-001",
+  "type": "fix",
+  "description": "Fix type mismatches and create centralized API client. (1) Rewrite AiAnalysis in types.ts to use stages.investigator/impact_analyst/planner/report_generator matching backend run_full_ai_workflow return shape. (2) Add status/created_at to StoredAnalysis. (3) Create frontend/src/api.ts with typed wrappers for all endpoints. (4) Update App.tsx and all views to import from api.ts instead of duplicating fetch logic. Independent of FEAT-002 on the backend side; FEAT-002 depends on the types defined here.",
+  "status": "completed",
+  "steps": [
+    "1. Edit frontend/src/types.ts: remove the existing AiAnalysis type (lines defining planner/risk_assessor/patch_proposer). Add AiInvestigator, AiImpactAnalyst, AiPlannerTask, AiPlanner, AiReportGenerator, AiStages sub-types. Rewrite AiAnalysis as { job_id: string; status: string; stages?: AiStages; error?: string | null }. Add status: string and created_at?: string to StoredAnalysis.",
+    "2. Create frontend/src/api.ts: export API_BASE constant using import.meta.env.VITE_API_URL pattern. Export a typed request<T> helper with AbortController timeout (default 180s). Export api object with methods: health, analyze, getAnalysis, getFindings, getGraph, getPlan, implement, verify, aiAnalyze (5 min timeout), aiStatus, gitStatus, report. All methods use the request<T> helper and return properly typed results matching types.ts.",
+    "3. Edit frontend/src/App.tsx: add import { api } from './api'. Remove const API = ... line. Replace fetch(`${API}/health`) with api.health(). Replace fetch(`${API}/analysis/${savedId}`) with api.getAnalysis(savedId). Cast results to the types declared in types.ts.",
+    "4. Edit frontend/src/views/RepositoryView.tsx: add import { api } from '../api'. Remove const API = ... line. Replace fetch(`${API}/analyze`, ...) with api.analyze(repositoryPath, request). Replace fetch(`${API}/git/status?...`) with api.gitStatus(repositoryPath). Keep window.localStorage.setItem and onAnalysisComplete calls unchanged.",
+    "5. Edit frontend/src/views/DashboardView.tsx: add import { api } from '../api'. Remove const API = ... line. Replace fetch(`${API}/analysis/${analysisId}/findings`) with api.getFindings(analysisId).",
+    "6. Edit frontend/src/views/FindingsView.tsx: add import { api } from '../api'. Remove const API = ... line. Replace fetch(`${API}/analysis/${analysisId}/findings`) with api.getFindings(analysisId).",
+    "7. Edit frontend/src/views/ImpactView.tsx: add import { api } from '../api'. Remove const API = ... line. Replace fetch(`${API}/analysis/${analysisId}/graph`) with api.getGraph(analysisId).",
+    "8. Edit frontend/src/views/VerificationView.tsx: add import { api } from '../api'. Remove const API = ... line. Replace the verify fetch with api.verify(repositoryPath, analysisId || undefined).",
+    "9. Edit frontend/src/views/PatchView.tsx: add import { api } from '../api'. Remove const API = ... line. Replace approveImplementation fetch with api.implement({ analysis_id: analysisId, approved: true }). Replace generatePatches fetch with api.implement({ analysis_id: analysisId, approved: true, generate_patch: true }).",
+    "10. Edit frontend/src/views/PlanningView.tsx: add import { api } from '../api'. Remove const API = ... line. In runAiAnalysis(), replace the initial fetch with api.aiAnalyze(analysisId). After receiving job_id, add a polling loop: call api.aiStatus(job_id) every 3 seconds until status !== 'running' (max 100 polls). Update the AI result display to read from aiAnalysis.stages.investigator, aiAnalysis.stages.impact_analyst, aiAnalysis.stages.planner.tasks (using t.title/t.description/t.rationale/t.files/t.complexity_estimate not t.task/t.reason), aiAnalysis.stages.report_generator."
+  ],
+  "acceptance_criteria": [
+    "Running `cd frontend && npx tsc --noEmit` produces zero type errors",
+    "AiAnalysis type has job_id, status, stages (with investigator/impact_analyst/planner/report_generator sub-types), and error fields — no planner/risk_assessor/patch_proposer flat keys",
+    "StoredAnalysis has status: string and created_at?: string fields",
+    "frontend/src/api.ts exists and exports api with all endpoint methods",
+    "No view file contains the pattern `const API = \\`${(import.meta.env.VITE_API_URL` — all fetch calls go through api.ts",
+    "PlanningView renders aiAnalysis.stages.planner.tasks[].title (not .task), .rationale (not .reason), and displays investigator.risk_narrative, impact_analyst.impact_summary, and report_generator.executive_summary when present"
+  ],
+  "verification": [
+    "cd c:\\Users\\GAGAN KUMAR L R\\Downloads\\CODE_GARDIAN-main\\CODE_GARDIAN-main\\frontend && npx tsc --noEmit",
+    "cd c:\\Users\\GAGAN KUMAR L R\\Downloads\\CODE_GARDIAN-main\\CODE_GARDIAN-main\\frontend && npm run build"
+  ],
+  "blocked_reason": null,
+  "findings": "AiAnalysis type rewritten with stages.investigator/impact_analyst/planner/report_generator sub-types. StoredAnalysis gained status:string and created_at?:string. api.ts created with typed request<T> helper (180s default, 300s for AI) and api object covering all endpoints. App.tsx, RepositoryView, DashboardView, FindingsView, ImpactView, VerificationView, PatchView, and PlanningView all import from api.ts; no view file retains a `const API = ...` line. PlanningView polls api.aiStatus every 3s (max 100 polls) and renders stages.planner.tasks[].title/.description/.rationale/.files/.complexity_estimate, stages.investigator.risk_narrative, stages.impact_analyst.impact_summary, stages.report_generator.executive_summary. tsc --noEmit: 0 errors. npm run build: success (52s)."
+}
