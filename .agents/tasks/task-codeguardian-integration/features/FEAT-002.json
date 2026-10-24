@@ -1,0 +1,28 @@
+{
+  "id": "FEAT-002",
+  "type": "fix",
+  "description": "Make /api/ai/analyze non-blocking via threading; add tests for async flow; update docs. Depends on FEAT-001 types being in place for accurate test assertions. Backend changes are independent of frontend changes in FEAT-001 and can be read/understood from backend/main.py alone.",
+  "status": "completed",
+  "steps": [
+    "1. Edit backend/main.py: add 'import threading' at the top (after existing imports). Confirm 'from typing import Any' is already imported (it is, via existing code). Add module-level dict and lock: _AI_JOBS: dict[str, dict[str, Any]] = {} and _AI_JOBS_LOCK = threading.Lock() after the FastAPI app and middleware setup but before route definitions.",
+    "2. Edit backend/main.py: replace the body of the ai_analyze() route function. Keep the existing function signature (@app.post('/api/ai/analyze'), def ai_analyze(payload: AIAnalyzeRequest) -> dict[str, object]). Keep the load_analysis call and 404 check. Keep the API key check and the 'failed' return for missing key. Keep the repository_summary, findings, dependency_graph, and changed_files construction. Then: generate job_id = str(uuid.uuid4()), seed _AI_JOBS[job_id] = {'job_id': job_id, 'status': 'running', 'stages': {}, 'error': None} under _AI_JOBS_LOCK, define a _run() inner function that calls run_full_ai_workflow(...) with analysis_id=payload.analysis_id and the prepared args, overrides ai_result['job_id'] = job_id, writes the result into _AI_JOBS under the lock, then calls load_analysis+update_analysis to persist — wrapping both the workflow call and the persist in try/except. Start threading.Thread(target=_run, daemon=True).start(). Return {'job_id': job_id, 'status': 'running', 'analysis_id': payload.analysis_id} immediately.",
+    "3. Edit backend/main.py: replace the body of ai_status() route. Keep @app.get('/api/ai/status/{job_id}') and signature. First check _AI_JOBS under _AI_JOBS_LOCK and return the record if found. If not found, fall back to the existing DB scan (scan all analyses records for ai_analysis.job_id == job_id). Raise 404 if not found in either place. Remove the duplicate 'import sqlite3', 'from contextlib import closing', 'from backend.storage import DATABASE_PATH' lines inside the function body since these are already imported at module level (use the module-level imports instead).",
+    "4. Add two new test functions to tests/test_api.py (at the end of the file): test_ai_analyze_returns_running_status_immediately and test_ai_status_returns_running_then_completed. Both monkeypatch NEBIUS_API_KEY='fake-key-for-test' and monkeypatch run_full_ai_workflow in backend.main. The first test verifies the POST returns in under 2 seconds with status='running'. The second test verifies that status endpoint returns 'running' before the fake workflow completes, and 'completed' with correct stages data after the completion_event is set and the thread finishes.",
+    "5. Edit .env.example: on the VITE_API_URL comment line, change '8000' to '8001' so local dev comment matches PORT=8001.",
+    "6. Edit README.md (or create docs/AI_WORKFLOW.md if README does not have an AI section): add a note explaining POST /api/ai/analyze returns {job_id, status: 'running'} immediately; poll GET /api/ai/status/{job_id} every 3 seconds until status is not 'running'; in-memory job store is process-local (lost on restart); result is persisted to SQLite after completion and recoverable via DB scan fallback; requires NEBIUS_API_KEY."
+  ],
+  "acceptance_criteria": [
+    "POST /api/ai/analyze with a valid analysis_id and NEBIUS_API_KEY set returns HTTP 200 with {job_id, status: 'running', analysis_id} within 1 second (not after all AI stages complete)",
+    "GET /api/ai/status/{job_id} returns {status: 'running', ...} immediately after the POST while the job is in progress",
+    "GET /api/ai/status/{job_id} returns {status: 'completed', stages: {...}, ...} after the background thread finishes",
+    "Existing test test_ai_analyze_without_api_key_reports_missing_credentials still passes",
+    "New test test_ai_analyze_returns_running_status_immediately passes (elapsed < 2s)",
+    "New test test_ai_status_returns_running_then_completed passes",
+    "All existing tests in tests/test_api.py and tests/test_analyzer.py still pass"
+  ],
+  "verification": [
+    "cd c:\\Users\\GAGAN KUMAR L R\\Downloads\\CODE_GARDIAN-main\\CODE_GARDIAN-main && python -m pytest tests/ -x -q"
+  ],
+  "blocked_reason": null,
+  "findings": "All 6 steps implemented. `import threading` and `from typing import Any` added at module level. `_AI_JOBS: dict[str, dict[str, Any]]` and `_AI_JOBS_LOCK = threading.Lock()` added after middleware setup. `ai_analyze()` now returns `{job_id, status: 'running', analysis_id}` immediately and starts a daemon thread that runs `run_full_ai_workflow`, writes result back under lock, and persists to SQLite. `ai_status()` checks `_AI_JOBS` under lock first, falls back to DB scan; duplicate inline imports removed. Two new tests added: `test_ai_analyze_returns_running_status_immediately` (verifies elapsed < 2s) and `test_ai_status_returns_running_then_completed` (verifies polling contract with completion_event). `.env.example` comment updated from 8000 to 8001. README.md architecture section updated and AI Integration section expanded with async polling contract and status table. All 46 tests pass (25.4s)."
+}
