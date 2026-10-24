@@ -1,0 +1,27 @@
+/* approval.css — uses design tokens from styles.css */
+.heading-actions {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+}
+.approval-note {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 14px;
+  padding: 13px 15px;
+  background: rgba(0, 255, 136, 0.07);
+  border: 1px solid rgba(0, 255, 136, 0.2);
+  border-radius: var(--radius-sm, 4px);
+  color: var(--color-accent, #00ff88);
+  font-size: 13px;
+}
+.approval-note b { margin-right: 4px; }
+
+@media (max-width: 800px) {
+  .heading-actions {
+    align-items: flex-start;
+    flex-direction: column;
+    gap: 8px;
+  }
+}

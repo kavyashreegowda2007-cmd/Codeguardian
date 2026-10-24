@@ -1,0 +1,7 @@
+{
+  "task_id": "task-codeguardian-integration",
+  "task_description": "Full end-to-end integration fix: fix AiAnalysis type mismatch, make /api/ai/analyze non-blocking via threading, add centralized api.ts client, update all views to use it, add tests for async AI flow, update docs.",
+  "status": "pending",
+  "feature_order": ["FEAT-001", "FEAT-002"],
+  "blocked_reason": null
+}

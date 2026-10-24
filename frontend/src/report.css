@@ -1,0 +1,46 @@
+/* report.css — uses design tokens from styles.css */
+.final-report {
+  margin: 22px 0 55px;
+  border: 1px solid var(--color-border, #1e2d45);
+  background: var(--color-bg-card, #1a2235);
+  padding: 24px;
+  border-radius: var(--radius-md, 8px);
+}
+.report-title {
+  display: flex;
+  align-items: center;
+  gap: 11px;
+}
+.report-title h2 {
+  margin: 0;
+  font-size: 20px;
+  color: var(--color-text-primary, #f0f4f8);
+}
+.report-title .eyebrow { margin: 0 0 4px; }
+.report-status {
+  margin-left: auto;
+  font: 10px var(--font-mono, 'DM Mono', monospace);
+  padding: 6px 10px;
+  border: 1px solid var(--color-border, #1e2d45);
+  color: var(--color-text-secondary, #8892a4);
+  border-radius: var(--radius-sm, 4px);
+}
+.report-status.verified {
+  background: rgba(0, 255, 136, 0.1);
+  border-color: rgba(0, 255, 136, 0.3);
+  color: var(--color-accent, #00ff88);
+}
+.report-grid {
+  display: grid;
+  grid-template-columns: 2fr 1fr 1fr 1fr;
+  gap: 16px;
+  border-top: 1px solid var(--color-border, #1e2d45);
+  margin-top: 20px;
+  padding-top: 18px;
+}
+.report-grid small { display: block; font: 10px var(--font-mono, 'DM Mono', monospace); color: var(--color-text-secondary, #8892a4); text-transform: uppercase; }
+.report-grid b { font-size: 13px; margin-top: 6px; display: block; color: var(--color-text-primary, #f0f4f8); }
+
+@media (max-width: 800px) {
+  .report-grid { grid-template-columns: 1fr 1fr; }
+}
