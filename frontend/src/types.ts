@@ -22,6 +22,12 @@ export type Result = {
   evidence: {
     files: string[];
     symbols: { name: string; kind: string; file: string; line: number }[];
+    imports: Record<string, string[]>;
+    dependencies: string[];
+    tests: string[];
+    routes: string[];
+    database_components: string[];
+    configuration: string[];
   };
 };
 
@@ -110,34 +116,50 @@ export type ActivityEvent = {
 };
 
 export type AiInvestigator = {
+  findings_confirmed: unknown[];
+  findings_added: unknown[];
   risk_narrative: string;
-  affected_areas: string[];
-  key_concerns: string[];
+  priority_areas: string[];
+  partial?: boolean;
+};
+
+export type AiRankedRisk = {
+  file: string;
+  risk_level: string;
+  reason: string;
 };
 
 export type AiImpactAnalyst = {
   impact_summary: string;
-  severity: string;
-  affected_systems: string[];
+  ranked_risks: AiRankedRisk[];
+  blast_radius: number;
+  uncertainty: string;
+  partial?: boolean;
 };
 
 export type AiPlannerTask = {
+  id: string;
   title: string;
   description: string;
-  rationale: string;
   files: string[];
+  priority: number;
   complexity_estimate: string;
+  rationale: string;
 };
 
 export type AiPlanner = {
   tasks: AiPlannerTask[];
-  overall_approach: string;
+  partial?: boolean;
+  error?: string;
 };
 
 export type AiReportGenerator = {
   executive_summary: string;
-  recommendations: string[];
-  risk_rating: string;
+  key_findings: string[];
+  recommended_actions: string[];
+  confidence_level: string;
+  limitations: string[];
+  partial?: boolean;
 };
 
 export type AiStages = {

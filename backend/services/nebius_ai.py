@@ -1,7 +1,11 @@
 """Nebius AI integration module using the OpenAI-compatible SDK.
 
 Uses NEBIUS_API_KEY / NEBIUS_MODEL env vars (NVIDIA_API_KEY / NVIDIA_MODEL as
-fallbacks) and routes to https://api.studio.nebius.com/v1/.
+fallbacks) and routes to https://api.tokenfactory.nebius.com/v1/
+
+Note: Nebius AI Studio was renamed to Nebius Token Factory.
+The new API base URL is https://api.tokenfactory.nebius.com/v1/
+The old studio URL (api.studio.nebius.com) no longer serves models.
 """
 
 from __future__ import annotations
@@ -16,8 +20,8 @@ from typing import Any
 # Configuration helpers
 # ---------------------------------------------------------------------------
 
-_NEBIUS_BASE_URL = "https://api.studio.nebius.com/v1/"
-_DEFAULT_MODEL = "nvidia/llama-3.1-nemotron-70b-instruct"
+_NEBIUS_BASE_URL = "https://api.tokenfactory.nebius.com/v1/"
+_DEFAULT_MODEL = "nvidia/Nemotron-3_5-Lightning"
 
 
 def _api_key() -> str:

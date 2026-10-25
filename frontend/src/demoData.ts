@@ -27,6 +27,16 @@ export const DEMO_RESULT: Result = {
       { name: "UserModel", kind: "class", file: "auth/models.py", line: 5 },
       { name: "auth_router", kind: "variable", file: "api/routes/auth.py", line: 1 },
     ],
+    imports: {
+      "auth/login.py": ["auth.models", "config.settings"],
+      "api/routes/auth.py": ["auth.login", "auth.models"],
+      "tests/test_auth.py": ["auth.login"],
+    },
+    dependencies: ["twilio", "phonenumbers", "bcrypt", "pyjwt"],
+    tests: ["tests/test_auth.py", "tests/test_session.py"],
+    routes: ["/api/auth/login", "/api/auth/verify", "/api/auth/logout"],
+    database_components: ["users", "sessions", "phone_verifications"],
+    configuration: ["config/settings.py"],
   },
 };
 

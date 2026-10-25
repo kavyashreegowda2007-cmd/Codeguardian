@@ -92,6 +92,18 @@ export const api = {
     });
   },
 
+  generatePatches(analysisId: string): Promise<{ patch_job_id: string; status: string; analysis_id: string }> {
+    return request<{ patch_job_id: string; status: string; analysis_id: string }>("/patches/generate", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ analysis_id: analysisId }),
+    });
+  },
+
+  patchStatus(jobId: string): Promise<{ patch_job_id: string; status: string; patch_data?: { file: string; unified_diff: string }[]; summary?: string; error?: string | null }> {
+    return request(`/patches/status/${encodeURIComponent(jobId)}`);
+  },
+
   verify(repositoryPath: string, analysisId?: string): Promise<Verification> {
     return request<Verification>("/verify", {
       method: "POST",

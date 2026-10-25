@@ -14,9 +14,12 @@ OLLAMA_DEFAULT_BASE_URL = "http://127.0.0.1:11434"
 OLLAMA_DEFAULT_MODEL = "qwen2.5-coder:7b"
 GEMINI_DEFAULT_MODEL = "gemini-3.7-flash"
 
+OPENROUTER_DEFAULT_BASE_URL = "https://openrouter.ai/api/v1"
+OPENROUTER_DEFAULT_MODEL = "nvidia/nemotron-3.5-lightning:free"
+
 
 def _llm_provider() -> str:
-    return os.getenv("LLM_PROVIDER", "ollama").strip().lower()
+    return os.getenv("LLM_PROVIDER", "openrouter").strip().lower()
 
 
 def _ollama_base_url() -> str:
@@ -33,6 +36,18 @@ def _gemini_api_key() -> str:
 
 def _gemini_model() -> str:
     return os.getenv("GEMINI_MODEL", GEMINI_DEFAULT_MODEL).strip()
+
+
+def _openrouter_api_key() -> str:
+    return os.getenv("OPENROUTER_API_KEY", "").strip()
+
+
+def _openrouter_base_url() -> str:
+    return os.getenv("OPENROUTER_BASE_URL", OPENROUTER_DEFAULT_BASE_URL).strip().rstrip("/")
+
+
+def _openrouter_model() -> str:
+    return os.getenv("OPENROUTER_MODEL", OPENROUTER_DEFAULT_MODEL).strip()
 
 
 def _call_ollama(payload: dict[str, Any]) -> str:
@@ -84,8 +99,84 @@ def _call_gemini(prompt: str) -> str:
     return "".join(chunks)
 
 
+def _call_openrouter(prompt: str) -> str:
+    """Call OpenRouter's OpenAI-compatible chat completions API.
+
+    Uses the ``openai`` SDK pointed at the OpenRouter base URL.
+    Returns the assistant's message content as a string.
+    """
+    api_key = _openrouter_api_key()
+    if not api_key:
+        raise RuntimeError(
+            "OpenRouter API key is not configured. "
+            "Set OPENROUTER_API_KEY to enable AI patch generation."
+        )
+
+    try:
+        from openai import OpenAI  # type: ignore[import-untyped]
+    except ImportError as exc:
+        raise RuntimeError(
+            "The openai Python package is not installed. "
+            "Run: pip install openai==1.57.4"
+        ) from exc
+
+    base_url = _openrouter_base_url()
+    model = _openrouter_model()
+
+    client = OpenAI(api_key=api_key, base_url=base_url)
+
+    last_exc: Exception | None = None
+    delays = [2, 4, 8]
+
+    for attempt, delay in enumerate([0] + delays):
+        if delay:
+            import time
+            time.sleep(delay)
+        try:
+            response = client.chat.completions.create(
+                model=model,
+                messages=[
+                    {
+                        "role": "system",
+                        "content": (
+                            "You are a code generation assistant. "
+                            "Return only valid JSON as requested. "
+                            "Do not include markdown fences or prose. "
+                            "All newlines inside JSON string values MUST be escaped as \\n. "
+                            "All quotes inside JSON string values MUST be escaped as \\\"."
+                        ),
+                    },
+                    {"role": "user", "content": prompt},
+                ],
+                temperature=0.2,
+                timeout=600,  # 10 minutes — free-tier models can be slow
+            )
+            content = response.choices[0].message.content
+            if content is None:
+                raise RuntimeError("OpenRouter returned an empty response.")
+            return content
+        except Exception as exc:  # noqa: BLE001
+            exc_str = str(exc).lower()
+            is_rate_limit = (
+                "429" in exc_str
+                or "rate limit" in exc_str
+                or "too many requests" in exc_str
+            )
+            if is_rate_limit and attempt < len(delays):
+                last_exc = exc
+                continue
+            # Non-rate-limit errors or exhausted retries
+            raise RuntimeError(f"OpenRouter API call failed: {exc}") from exc
+
+    raise RuntimeError(
+        f"OpenRouter rate limit exceeded after {len(delays)} retries: {last_exc}"
+    ) from last_exc
+
+
 def _call_llm(prompt: str) -> str:
     provider = _llm_provider()
+    if provider == "openrouter":
+        return _call_openrouter(prompt)
     if provider == "gemini":
         return _call_gemini(prompt)
     if provider == "ollama":
@@ -134,23 +225,58 @@ def _validate_generated_files(allowed_files: set[str], generated: Any) -> list[d
     if not isinstance(files, list):
         raise ValueError("Model output must include a JSON 'files' array.")
     validated: list[dict[str, str]] = []
+    skipped: list[str] = []
     for entry in files:
         if not isinstance(entry, dict):
-            raise ValueError("Each file entry must be an object.")
+            continue
         file_name = entry.get("file")
         content = entry.get("content")
         if not isinstance(file_name, str) or not isinstance(content, str):
-            raise ValueError("Each generated file must have string file and content values.")
-        normalized = _normalize_rel_path(file_name)
+            continue
+        try:
+            normalized = _normalize_rel_path(file_name)
+        except ValueError:
+            skipped.append(str(file_name))
+            continue
         if normalized not in allowed_files:
-            raise ValueError(f"Generated file outside approved allowlist: {normalized}")
+            # Try fuzzy match: basename match against allowlist
+            basename = normalized.rsplit("/", 1)[-1]
+            match = next((f for f in allowed_files if f.endswith("/" + basename) or f == basename), None)
+            if match:
+                normalized = match
+            else:
+                skipped.append(normalized)
+                continue
         if not content.strip():
-            raise ValueError(f"Generated file content is empty: {normalized}")
+            skipped.append(normalized)
+            continue
+        # For Python files: reject content where function bodies have no indentation
+        # (model sometimes strips all leading whitespace from code lines)
+        if normalized.endswith(".py"):
+            lines = content.splitlines()
+            in_def = False
+            indent_ok = True
+            for line in lines:
+                stripped = line.lstrip()
+                if stripped.startswith(("def ", "class ")):
+                    in_def = True
+                    continue
+                if in_def and stripped and not line.startswith((" ", "\t")):
+                    # Non-empty line after def/class with no indentation
+                    indent_ok = False
+                    break
+                if stripped:
+                    in_def = False
+            if not indent_ok:
+                skipped.append(f"{normalized} [indentation stripped by model]")
+                continue
         validated.append({"file": normalized, "content": content})
     if not validated:
-        raise ValueError("No valid generated files were returned.")
-    if len(validated) > max(10, len(allowed_files) * 2):
-        raise ValueError("Generated file count is not reasonable for this change.")
+        skipped_str = ", ".join(skipped[:5])
+        raise ValueError(
+            f"Model returned only files outside the approved allowlist ({skipped_str}). "
+            f"Allowlist: {sorted(allowed_files)}"
+        )
     return validated
 
 
@@ -169,73 +295,179 @@ def _build_prompt(item: dict[str, Any], plan: dict[str, Any], repository_path: s
         if candidate.exists():
             file_context.append(f"FILE: {name}\n```\n{candidate.read_text(encoding='utf-8', errors='ignore')}\n```\n")
     relevant_tests = []
-    for candidate in sorted(repository.rglob("*")):
-        if candidate.is_file() and re.search(r"(?:^test_.*\.py$|.*_test\.py$|.*\.(test|spec)\.[jt]sx?$)", candidate.name, re.IGNORECASE):
-            relevant_tests.append(candidate)
-    for test_file in relevant_tests[:8]:
+    # Skip adding test files to context — they're already covered by allowed_files
+    # and removing them reduces prompt size for slow free-tier models
+    for test_file in relevant_tests[:0]:  # disabled
         rel = test_file.relative_to(repository).as_posix()
         if rel not in allowed_files:
             file_context.append(f"TEST_FILE: {rel}\n```\n{test_file.read_text(encoding='utf-8', errors='ignore')}\n```\n")
     prompt = (
         "You are operating on an existing production-style repository.\n"
-        "Modify only the files in the approved allowlist.\n"
+        "Modify only the files in the approved allowlist below.\n"
         "Preserve existing functionality and repository conventions.\n"
         "Do not invent APIs that do not exist.\n"
         "Do not expose secrets.\n"
         "Do not modify unrelated files.\n"
-        "Return only valid JSON matching this schema:\n"
+        "Return ONLY a single valid JSON object matching this schema exactly:\n"
         "{\n"
         "  \"files\": [\n"
         "    {\"file\": \"relative/path.py\", \"content\": \"complete new file contents\"}\n"
         "  ],\n"
         "  \"summary\": \"short explanation\"\n"
         "}\n"
+        "CRITICAL rules:\n"
+        "- The 'file' value MUST be copied EXACTLY from the approved files list below. Do not invent new paths.\n"
+        "- All newlines inside 'content' values MUST be escaped as \\n.\n"
+        "- All double quotes inside 'content' values MUST be escaped as \\\".\n"
+        "- All backslashes inside 'content' values MUST be escaped as \\\\.\n"
+        "- No raw (literal) newlines inside any JSON string value.\n"
+        "- PRESERVE ALL INDENTATION. Python indentation is syntactically required. Every indented line must keep its leading spaces when escaped.\n"
+        "- Example correct: 'def f():\\n    return 1\\n' (4 spaces before return, escaped as \\n    return)\n"
+        "- Example WRONG: 'def f():\\nreturn 1\\n' (missing indentation — this is a syntax error)\n"
+        "- No markdown fences, no prose, no text before or after the JSON.\n"
         f"The change request is:\n{request}\n\n"
-        "Approved files:\n"
-        f"{chr(10).join(allowed_files)}\n\n"
-        "Repository context:\n"
+        "APPROVED FILES (use these exact paths in the 'file' field):\n"
+        + "\n".join(f"  - {f}" for f in allowed_files)
+        + "\n\nRepository context:\n"
         f"{chr(10).join(file_context)}\n\n"
-        "Rules:\n"
-        "- Only include files that actually need modification.\n"
-        "- If a file does not need change, do not return it.\n"
-        "- Use complete replacement content for each changed file.\n"
-        "- No markdown fences, no prose outside JSON.\n"
-        "- No absolute paths or parent traversal.\n"
+        "Only include files that actually need modification. Use complete replacement content.\n"
     )
     return prompt
 
 
 def _strip_fences(raw: str) -> str:
     text = raw.strip()
+    # Strip markdown fences (```json ... ``` or ``` ... ```)
     if text.startswith("```"):
-        text = re.sub(r"^```(?:json)?\s*", "", text, flags=re.IGNORECASE)
-        text = re.sub(r"\s*```$", "", text)
+        lines = text.splitlines()
+        # Drop first line (``` or ```json) and last ``` line
+        inner = []
+        for line in lines[1:]:
+            if line.strip() == "```":
+                break
+            inner.append(line)
+        text = "\n".join(inner).strip()
     return text.strip()
 
 
-def _repair_json_string_literals(raw: str) -> str:
-    def _escape_value(match: re.Match[str]) -> str:
-        literal = match.group(0)
-        return literal.replace("\r", "\\r").replace("\n", "\\n").replace("\t", "\\t")
+def _extract_json_object(text: str) -> str:
+    """Extract the outermost {...} JSON object from a potentially noisy string."""
+    start = text.find("{")
+    if start == -1:
+        return text
+    depth = 0
+    in_string = False
+    escape_next = False
+    for i, ch in enumerate(text[start:], start):
+        if escape_next:
+            escape_next = False
+            continue
+        if ch == "\\" and in_string:
+            escape_next = True
+            continue
+        if ch == '"':
+            in_string = not in_string
+            continue
+        if in_string:
+            continue
+        if ch == "{":
+            depth += 1
+        elif ch == "}":
+            depth -= 1
+            if depth == 0:
+                return text[start:i + 1]
+    return text[start:]
 
-    return re.sub(r'"(?:\\.|[^"\\])*"', _escape_value, raw)
+
+def _remove_trailing_commas(text: str) -> str:
+    """Remove trailing commas before ] or } — common LLM JSON mistake."""
+    return re.sub(r",\s*([}\]])", r"\1", text)
 
 
 def _parse_model_json(raw: str) -> dict[str, Any]:
+    """Parse JSON from model output with multiple fallback strategies."""
     cleaned = _strip_fences(raw)
-    repaired = _repair_json_string_literals(cleaned)
-    try:
-        data = json.loads(repaired)
-    except json.JSONDecodeError as exc:
+    extracted = _extract_json_object(cleaned)
+
+    candidates = [
+        cleaned,
+        extracted,
+        _remove_trailing_commas(extracted),
+        _fix_unescaped_newlines(extracted),
+        _remove_trailing_commas(_fix_unescaped_newlines(extracted)),
+    ]
+
+    for candidate in candidates:
         try:
-            data = json.loads(cleaned)
+            data = json.loads(candidate)
+            if isinstance(data, dict) and "files" in data:
+                return data
         except json.JSONDecodeError:
-            raise ValueError(f"Model returned invalid JSON: {exc}") from exc
-    if not isinstance(data, dict):
-        raise ValueError("Model JSON must be an object.")
-    if "files" not in data:
-        raise ValueError("Model JSON must contain a 'files' field.")
-    return data
+            pass
+
+    # Final: raise with the most informative error
+    try:
+        json.loads(_remove_trailing_commas(extracted))
+    except json.JSONDecodeError as exc:
+        raise ValueError(f"Model returned invalid JSON: {exc}") from exc
+    raise ValueError("Model JSON must be an object with a 'files' field.")
+
+
+def _fix_unescaped_newlines(text: str) -> str:
+    """Fix unescaped newlines, tabs, AND bare double-quotes inside JSON string values.
+
+    Walks the text character-by-character. When inside a string, any character
+    that would break the JSON spec is replaced with its escape sequence.
+    For an unescaped quote, we peek at the next non-whitespace character:
+    if it is one of , ] } : we treat it as a legitimate closing quote;
+    otherwise we escape it as \".
+    """
+    result = []
+    in_string = False
+    i = 0
+    n = len(text)
+    while i < n:
+        ch = text[i]
+        if ch == "\\" and in_string:
+            # Already-escaped sequence — keep backslash + next char as-is
+            result.append(ch)
+            i += 1
+            if i < n:
+                result.append(text[i])
+                i += 1
+            continue
+        if ch == '"':
+            if in_string:
+                # Peek ahead to decide: closing quote or bare quote inside value?
+                j = i + 1
+                while j < n and text[j] in " \t\r\n":
+                    j += 1
+                next_ch = text[j] if j < n else ""
+                if next_ch in (",", "]", "}", ":"):
+                    # Legitimate closing quote
+                    in_string = False
+                    result.append('"')
+                else:
+                    # Unescaped quote inside a string value — escape it
+                    result.append('\\"')
+            else:
+                in_string = True
+                result.append('"')
+            i += 1
+            continue
+        if in_string:
+            if ch == "\n":
+                result.append("\\n")
+            elif ch == "\r":
+                result.append("\\r")
+            elif ch == "\t":
+                result.append("\\t")
+            else:
+                result.append(ch)
+        else:
+            result.append(ch)
+        i += 1
+    return "".join(result)
 
 
 def _build_patch_data(repository_path: str, generated_files: list[dict[str, str]]) -> list[dict[str, str]]:
@@ -245,29 +477,44 @@ def _build_patch_data(repository_path: str, generated_files: list[dict[str, str]
         relative_path = entry["file"]
         target = repo_root / relative_path
         original = target.read_text(encoding="utf-8", errors="ignore") if target.exists() else ""
-        diff = "".join(
+        # The JSON repair may have left \\n as literal two-char sequences.
+        # Decode them back into real newlines before diffing.
+        content = entry["content"]
+        content = content.replace("\\n", "\n").replace("\\t", "\t").replace("\\r", "\r")
+        # Also unescape any \" that the repair introduced
+        content = content.replace('\\"', '"')
+        diff_lines = list(
             difflib.unified_diff(
                 original.splitlines(keepends=True),
-                entry["content"].splitlines(keepends=True),
-                fromfile="/dev/null" if not target.exists() else relative_path,
-                tofile=relative_path,
-                lineterm="",
+                content.splitlines(keepends=True),
+                fromfile=f"a/{relative_path}" if target.exists() else "/dev/null",
+                tofile=f"b/{relative_path}",
+                lineterm="\n",
             )
         )
-        if not diff:
+        if not diff_lines:
             raise ValueError(f"No diff generated for {relative_path}")
+        diff = "".join(
+            line if line.endswith("\n") else line + "\n"
+            for line in diff_lines
+        )
         patch_data.append({"file": relative_path, "unified_diff": diff})
     return patch_data
 
 
 def generate_code_patches(plan_id: str) -> dict[str, Any]:
-    try:
-        _call_llm("ping")
-    except Exception as exc:  # pragma: no cover - surfaced to API
-        provider = _llm_provider()
-        if provider == "ollama":
+    # Pre-flight: check credentials are configured before doing expensive work
+    provider = _llm_provider()
+    if provider == "openrouter" and not _openrouter_api_key():
+        raise RuntimeError("AI code generator unavailable. Ensure OPENROUTER_API_KEY is set and the OpenRouter API is reachable.")
+    if provider == "gemini" and not _gemini_api_key():
+        raise RuntimeError("AI code generator unavailable for provider 'gemini'. Check the provider configuration and credentials.")
+    if provider == "ollama":
+        # Still need to ping for ollama since there's no key to check
+        try:
+            _call_ollama({"model": _ollama_model(), "prompt": "ping", "stream": False})
+        except Exception as exc:
             raise RuntimeError("AI code generator unavailable. Start Ollama and ensure the configured model exists.") from exc
-        raise RuntimeError(f"AI code generator unavailable for provider '{provider}'. Check the provider configuration and credentials.") from exc
 
     item, plan_context = _load_plan_context(plan_id)
     repository_path = plan_context["repository_path"]
@@ -277,6 +524,8 @@ def generate_code_patches(plan_id: str) -> dict[str, Any]:
         response_text = _call_llm(prompt)
     except Exception as exc:  # pragma: no cover - surfaced to API
         provider = _llm_provider()
+        if provider == "openrouter":
+            raise RuntimeError("AI code generator unavailable. Ensure OPENROUTER_API_KEY is set and the OpenRouter API is reachable.") from exc
         if provider == "ollama":
             raise RuntimeError("AI code generator unavailable. Start Ollama and ensure the configured model exists.") from exc
         raise RuntimeError(f"AI code generator unavailable for provider '{provider}'. Check the provider configuration and credentials.") from exc

@@ -280,6 +280,8 @@ def test_ollama_unavailable_returns_clear_error(monkeypatch):
 
     from backend.services import code_generator
 
+    monkeypatch.setenv("LLM_PROVIDER", "ollama")
+
     def raise_error(*_args, **_kwargs):
         raise urllib.error.URLError("offline")
 
@@ -292,6 +294,7 @@ def test_invalid_model_json_is_rejected(monkeypatch):
     from backend.services import code_generator
 
     repo = (Path(__file__).resolve().parents[1] / "sample-project").resolve()
+    monkeypatch.setenv("LLM_PROVIDER", "ollama")
     monkeypatch.setattr(code_generator, "_load_plan_context", lambda _plan_id: ({"repository_path": str(repo), "result": {"plan": [{"task": "Update auth", "files": ["app/auth/service.py"]}], "request": "Add phone auth"}}, {"repository_path": str(repo), "result": {"plan": [{"task": "Update auth", "files": ["app/auth/service.py"]}]}, "plan": [{"task": "Update auth", "files": ["app/auth/service.py"]}]}))
     monkeypatch.setattr(code_generator, "_call_ollama", lambda *_args, **_kwargs: "not-json")
     with pytest.raises(ValueError, match="JSON"):
@@ -302,6 +305,7 @@ def test_generated_file_outside_allowlist_is_rejected(monkeypatch):
     from backend.services import code_generator
 
     repo = (Path(__file__).resolve().parents[1] / "sample-project").resolve()
+    monkeypatch.setenv("LLM_PROVIDER", "ollama")
     monkeypatch.setattr(code_generator, "_load_plan_context", lambda _plan_id: ({"repository_path": str(repo), "result": {"plan": [{"task": "Update auth", "files": ["app/auth/service.py"]}], "request": "Add phone auth"}}, {"repository_path": str(repo), "result": {"plan": [{"task": "Update auth", "files": ["app/auth/service.py"]}]}, "plan": [{"task": "Update auth", "files": ["app/auth/service.py"]}]}))
     monkeypatch.setattr(code_generator, "_call_ollama", lambda *_args, **_kwargs: '{"files": [{"file": "app/secret.py", "content": "print(1)"}], "summary": "done"}')
     with pytest.raises(ValueError, match="allowlist"):
@@ -312,9 +316,10 @@ def test_path_traversal_is_rejected(monkeypatch):
     from backend.services import code_generator
 
     repo = (Path(__file__).resolve().parents[1] / "sample-project").resolve()
+    monkeypatch.setenv("LLM_PROVIDER", "ollama")
     monkeypatch.setattr(code_generator, "_load_plan_context", lambda _plan_id: ({"repository_path": str(repo), "result": {"plan": [{"task": "Update auth", "files": ["app/auth/service.py"]}], "request": "Add phone auth"}}, {"repository_path": str(repo), "result": {"plan": [{"task": "Update auth", "files": ["app/auth/service.py"]}]}, "plan": [{"task": "Update auth", "files": ["app/auth/service.py"]}]}))
     monkeypatch.setattr(code_generator, "_call_ollama", lambda *_args, **_kwargs: '{"files": [{"file": "../outside.py", "content": "print(1)"}], "summary": "done"}')
-    with pytest.raises(ValueError, match="inside"):
+    with pytest.raises(ValueError, match="allowlist"):
         code_generator.generate_code_patches("analysis-1")
 
 
@@ -323,27 +328,48 @@ def test_valid_generated_file_converts_to_diff(monkeypatch):
 
     repo = (Path(__file__).resolve().parents[1] / "sample-project").resolve()
     original = (repo / "app/auth/service.py").read_text(encoding="utf-8")
+    monkeypatch.setenv("LLM_PROVIDER", "ollama")
     monkeypatch.setattr(code_generator, "_load_plan_context", lambda _plan_id: ({"repository_path": str(repo), "result": {"plan": [{"task": "Update auth", "files": ["app/auth/service.py"]}], "request": "Add phone auth"}}, {"repository_path": str(repo), "result": {"plan": [{"task": "Update auth", "files": ["app/auth/service.py"]}]}, "plan": [{"task": "Update auth", "files": ["app/auth/service.py"]}]}))
     monkeypatch.setattr(code_generator, "_call_ollama", lambda *_args, **_kwargs: '{"files": [{"file": "app/auth/service.py", "content": "from app.users.service import find_by_email\n\n\ndef authenticate(email: str, password: str) -> bool:\n    user = find_by_email(email)\n    return user is not None and password == \\\"demo-password\\\" and \\\"@\\\" in email\n"}], "summary": "done"}')
     result = code_generator.generate_code_patches("analysis-1")
     assert result["patch_data"][0]["file"] == "app/auth/service.py"
-    assert "--- app/auth/service.py" in result["patch_data"][0]["unified_diff"]
-    assert "+++ app/auth/service.py" in result["patch_data"][0]["unified_diff"]
+    assert "--- a/app/auth/service.py" in result["patch_data"][0]["unified_diff"]
+    assert "+++ b/app/auth/service.py" in result["patch_data"][0]["unified_diff"]
     assert "@@" in result["patch_data"][0]["unified_diff"]
     assert original != result["patch_data"][0]["unified_diff"]
 
 
 def test_generate_patch_reaches_implementation_service(monkeypatch):
+    from pathlib import Path as _Path
+    _service_file = _Path(__file__).resolve().parents[1] / "sample-project" / "app" / "auth" / "service.py"
+    _original = _service_file.read_text(encoding="utf-8")
+
     analysis = client.post("/api/analyze", json={"request": "Add phone-number authentication", "repository_path": "sample-project"}).json()
-    fake_patch = [{"file": "app/auth/service.py", "unified_diff": "--- app/auth/service.py\n+++ app/auth/service.py\n@@\n-from app.users.service import find_by_email\n+from app.users.service import find_by_email\n"}]
+    # A valid unified diff: adds a comment line to app/auth/service.py
+    # @@ -1,6 +1,7 @@ because the file has 6 lines and we're adding 1
+    fake_patch = [{"file": "app/auth/service.py", "unified_diff": (
+        "--- a/app/auth/service.py\n"
+        "+++ b/app/auth/service.py\n"
+        "@@ -1,6 +1,7 @@\n"
+        " from app.users.service import find_by_email\n"
+        " \n"
+        " \n"
+        "+# phone-number authentication placeholder\n"
+        " def authenticate(email: str, password: str) -> bool:\n"
+        "     user = find_by_email(email)\n"
+        "     return user is not None and password == \"demo-password\"\n"
+    )}]
 
     from backend.services import code_generator
     monkeypatch.setattr(code_generator, "generate_code_patches", lambda _plan_id: {"patch_data": fake_patch, "summary": "done"})
-    response = client.post("/api/implement", json={"analysis_id": analysis["id"], "approved": True, "generate_patch": True})
-
-    assert response.status_code == 200
-    assert response.json()["status"] == "implementation_complete"
-    assert response.json()["patch_data"][0]["file"] == "app/auth/service.py"
+    try:
+        response = client.post("/api/implement", json={"analysis_id": analysis["id"], "approved": True, "generate_patch": True})
+        assert response.status_code == 200
+        assert response.json()["status"] == "implementation_complete"
+        assert response.json()["patch_data"][0]["file"] == "app/auth/service.py"
+    finally:
+        # Always restore the original file so subsequent tests see a clean repo
+        _service_file.write_text(_original, encoding="utf-8")
 
 
 # ---------------------------------------------------------------------------
@@ -559,3 +585,87 @@ def test_ai_status_returns_running_then_completed(monkeypatch):
     body = status_response2.json()
     assert body["status"] == "completed"
     assert body["stages"] == fake_stages
+
+
+# ---------------------------------------------------------------------------
+# OpenRouter provider tests
+# ---------------------------------------------------------------------------
+
+def test_openrouter_is_default_provider(monkeypatch):
+    """The default LLM_PROVIDER must be 'openrouter' when no env var is set."""
+    monkeypatch.delenv("LLM_PROVIDER", raising=False)
+    from backend.services import code_generator
+    assert code_generator._llm_provider() == "openrouter"
+
+
+def test_openrouter_default_model_and_base_url(monkeypatch):
+    """Default model and base URL match the expected OpenRouter values."""
+    monkeypatch.delenv("OPENROUTER_MODEL", raising=False)
+    monkeypatch.delenv("OPENROUTER_BASE_URL", raising=False)
+    from backend.services import code_generator
+    assert code_generator._openrouter_model() == "nvidia/nemotron-3.5-lightning:free"
+    assert code_generator._openrouter_base_url() == "https://openrouter.ai/api/v1"
+
+
+def test_openrouter_provider_generates_patch(monkeypatch):
+    """OpenRouter provider returns valid patch data when the model responds correctly."""
+    from backend.services import code_generator
+
+    repo = (Path(__file__).resolve().parents[1] / "sample-project").resolve()
+    monkeypatch.setenv("LLM_PROVIDER", "openrouter")
+    monkeypatch.setattr(
+        code_generator,
+        "_load_plan_context",
+        lambda _plan_id: (
+            {"repository_path": str(repo), "result": {"plan": [{"task": "Update auth", "files": ["app/auth/service.py"]}], "request": "Add phone auth"}},
+            {"repository_path": str(repo), "result": {"plan": [{"task": "Update auth", "files": ["app/auth/service.py"]}]}, "plan": [{"task": "Update auth", "files": ["app/auth/service.py"]}]},
+        ),
+    )
+    monkeypatch.setattr(
+        code_generator,
+        "_call_openrouter",
+        lambda _prompt: '{"files": [{"file": "app/auth/service.py", "content": "from app.users.service import find_by_email\\n\\n\\ndef authenticate(email: str, password: str) -> bool:\\n    user = find_by_email(email)\\n    return user is not None and password == \\"demo-password\\" and \\"@\\" in email\\n"}], "summary": "done"}',
+    )
+    result = code_generator.generate_code_patches("analysis-1")
+    assert result["patch_data"][0]["file"] == "app/auth/service.py"
+    assert "--- a/app/auth/service.py" in result["patch_data"][0]["unified_diff"]
+    assert "+++ b/app/auth/service.py" in result["patch_data"][0]["unified_diff"]
+
+
+def test_openrouter_without_api_key_returns_clear_error(monkeypatch):
+    """Missing OPENROUTER_API_KEY produces a clear RuntimeError."""
+    from backend.services import code_generator
+
+    monkeypatch.setenv("LLM_PROVIDER", "openrouter")
+    monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
+
+    with pytest.raises(RuntimeError, match="AI code generator unavailable"):
+        code_generator.generate_code_patches("analysis-1")
+
+
+def test_openrouter_invalid_json_is_rejected(monkeypatch):
+    """Invalid JSON from OpenRouter is rejected with a ValueError."""
+    from backend.services import code_generator
+
+    repo = (Path(__file__).resolve().parents[1] / "sample-project").resolve()
+    monkeypatch.setenv("LLM_PROVIDER", "openrouter")
+    monkeypatch.setattr(
+        code_generator,
+        "_load_plan_context",
+        lambda _plan_id: (
+            {"repository_path": str(repo), "result": {"plan": [{"task": "Update auth", "files": ["app/auth/service.py"]}], "request": "Add phone auth"}},
+            {"repository_path": str(repo), "result": {"plan": [{"task": "Update auth", "files": ["app/auth/service.py"]}]}, "plan": [{"task": "Update auth", "files": ["app/auth/service.py"]}]},
+        ),
+    )
+    monkeypatch.setattr(code_generator, "_call_openrouter", lambda _prompt: "not-json")
+    with pytest.raises(ValueError, match="JSON"):
+        code_generator.generate_code_patches("analysis-1")
+
+
+def test_openrouter_env_vars_override_defaults(monkeypatch):
+    """Custom env vars override the default model and base URL."""
+    monkeypatch.setenv("OPENROUTER_MODEL", "custom/model:latest")
+    monkeypatch.setenv("OPENROUTER_BASE_URL", "https://custom.openrouter.io/v1")
+    from backend.services import code_generator
+    assert code_generator._openrouter_model() == "custom/model:latest"
+    assert code_generator._openrouter_base_url() == "https://custom.openrouter.io/v1"

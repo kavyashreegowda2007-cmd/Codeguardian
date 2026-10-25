@@ -11,6 +11,10 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse
 
+from dotenv import load_dotenv
+
+load_dotenv()  # Load .env file from the project root
+
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
@@ -68,6 +72,10 @@ app.add_middleware(
 # ---------------------------------------------------------------------------
 _AI_JOBS: dict[str, dict[str, Any]] = {}
 _AI_JOBS_LOCK = threading.Lock()
+
+# Patch generation jobs (background thread, same pattern as AI jobs)
+_PATCH_JOBS: dict[str, dict[str, Any]] = {}
+_PATCH_JOBS_LOCK = threading.Lock()
 
 
 class AnalyzeRequest(BaseModel):
@@ -742,6 +750,67 @@ def analysis_report_download(
             "Content-Disposition": f"attachment; filename={filename}",
         },
     )
+
+
+# ---------------------------------------------------------------------------
+# POST /api/patches/generate  — async patch generation (non-blocking)
+# ---------------------------------------------------------------------------
+
+class PatchGenerateRequest(BaseModel):
+    analysis_id: str
+
+
+@app.post("/api/patches/generate")
+def patches_generate(payload: PatchGenerateRequest) -> dict[str, object]:
+    """Start background patch generation. Returns {patch_job_id, status:'running'} immediately."""
+    item = load_analysis(payload.analysis_id)
+    if item is None:
+        raise HTTPException(status_code=404, detail="Analysis not found")
+
+    patch_job_id = str(uuid.uuid4())
+    with _PATCH_JOBS_LOCK:
+        _PATCH_JOBS[patch_job_id] = {"patch_job_id": patch_job_id, "status": "running", "error": None}
+
+    def _run() -> None:
+        try:
+            result = code_generator.generate_code_patches(payload.analysis_id)
+            with _PATCH_JOBS_LOCK:
+                _PATCH_JOBS[patch_job_id] = {
+                    "patch_job_id": patch_job_id,
+                    "status": "completed",
+                    "patch_data": result.get("patch_data", []),
+                    "summary": result.get("summary", ""),
+                    "error": None,
+                }
+            # Persist on the analysis record too
+            try:
+                stored = load_analysis(payload.analysis_id)
+                if stored is not None:
+                    stored["patch_job"] = _PATCH_JOBS[patch_job_id]
+                    update_analysis(stored)
+            except Exception:
+                pass
+        except Exception as exc:
+            with _PATCH_JOBS_LOCK:
+                _PATCH_JOBS[patch_job_id] = {
+                    "patch_job_id": patch_job_id,
+                    "status": "failed",
+                    "patch_data": [],
+                    "error": str(exc),
+                }
+
+    threading.Thread(target=_run, daemon=True).start()
+    return {"patch_job_id": patch_job_id, "status": "running", "analysis_id": payload.analysis_id}
+
+
+@app.get("/api/patches/status/{patch_job_id}")
+def patches_status(patch_job_id: str) -> dict[str, object]:
+    """Poll for patch generation result."""
+    with _PATCH_JOBS_LOCK:
+        record = _PATCH_JOBS.get(patch_job_id)
+    if record is not None:
+        return record
+    raise HTTPException(status_code=404, detail="Patch job not found")
 
 
 # ---------------------------------------------------------------------------

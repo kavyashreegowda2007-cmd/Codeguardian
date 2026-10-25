@@ -114,9 +114,9 @@ def execute_implementation(
         target.parent.mkdir(parents=True, exist_ok=True)
         if not diff:
             continue
-        patch_process = subprocess.run(["git", "apply", "--whitespace=nowarn", "-"], cwd=repository, input=diff, text=True, capture_output=True, timeout=60)
+        patch_process = subprocess.run(["git", "apply", "--whitespace=nowarn", "-"], cwd=repository, input=diff.encode("utf-8"), capture_output=True, timeout=60)
         if patch_process.returncode != 0:
-            stderr = patch_process.stderr.strip()
+            stderr = patch_process.stderr.decode("utf-8", errors="replace").strip()
             if "No valid patches in input" in stderr:
                 continue
             _rollback(repository)

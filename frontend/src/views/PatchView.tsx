@@ -48,6 +48,7 @@ export function PatchView({ analysisId, result, implementation, setImplementatio
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const [approvedMsg, setApprovedMsg] = useState("");
+  const [pollMsg, setPollMsg] = useState("");
 
   async function approveImplementation() {
     if (!analysisId) return;
@@ -68,11 +69,42 @@ export function PatchView({ analysisId, result, implementation, setImplementatio
     if (!analysisId) return;
     setLoading(true);
     setError("");
+    setApprovedMsg("");
+    setPollMsg("Starting patch generation…");
     try {
-      const data = await api.implement({ analysis_id: analysisId, approved: true, generate_patch: true });
-      setImplementation(data);
+      const job = await api.generatePatches(analysisId);
+      if (job.status === "failed") {
+        setError("Patch generation failed to start.");
+        setPollMsg("");
+        return;
+      }
+      let polls = 0;
+      while (polls < 120) {
+        await new Promise<void>(r => setTimeout(r, 5000));
+        polls++;
+        setPollMsg(`Waiting for NVIDIA Nemotron model… (${polls * 5}s elapsed, free tier takes 3–5 min)`);
+        const status = await api.patchStatus(job.patch_job_id);
+        if (status.status === "completed") {
+          setImplementation({
+            status: "implementation_complete",
+            message: status.summary ?? "Patches generated.",
+            patch_data: status.patch_data ?? [],
+            files_changed: (status.patch_data ?? []).map(p => p.file),
+          } as ImplementationResult);
+          setPollMsg("");
+          return;
+        }
+        if (status.status === "failed") {
+          setError(status.error ?? "Patch generation failed.");
+          setPollMsg("");
+          return;
+        }
+      }
+      setError("Patch generation timed out after 10 minutes.");
+      setPollMsg("");
     } catch (e) {
       setError(e instanceof Error ? e.message : "Could not generate patches");
+      setPollMsg("");
     } finally {
       setLoading(false);
     }
@@ -115,6 +147,16 @@ export function PatchView({ analysisId, result, implementation, setImplementatio
       </div>
 
       <ErrorBanner message={error} />
+      {error && (
+        <button onClick={() => setError("")} style={{ marginBottom: 12, background: "none", border: "none", cursor: "pointer", color: "var(--color-text-secondary)", fontSize: 12, textDecoration: "underline" }}>
+          Dismiss
+        </button>
+      )}
+      {pollMsg && (
+        <div style={{ marginBottom: 16, fontSize: 13, color: "var(--color-text-secondary)", fontFamily: "'DM Mono', monospace" }}>
+          ⏳ {pollMsg}
+        </div>
+      )}
       {approvedMsg && (
         <div className="approval-note" style={{ marginBottom: 20 }}>
           <Check size={15} />
@@ -163,7 +205,7 @@ export function PatchView({ analysisId, result, implementation, setImplementatio
         </div>
       )}
 
-      {loading && <LoadingSpinner label="Generating patches…" />}
+      {loading && <LoadingSpinner label="Generating patches via NVIDIA Nemotron… (free tier can take 3–5 min, please wait)" />}
 
       {/* Patch list */}
       {patches.length > 0 ? (
