@@ -11,7 +11,7 @@ services:
     envVars:
       # CORS: allow the Render public URL and local dev
       - key: ALLOWED_ORIGINS
-        value: https://codeguardian-v1ef.onrender.com,http://localhost:5173,http://127.0.0.1:5173
+        value: https://codeguardian-fai5.onrender.com,http://localhost:5173,http://127.0.0.1:5173
 
       # SQLite storage path inside the container.
       - key: CODEGUARDIAN_DB_PATH
