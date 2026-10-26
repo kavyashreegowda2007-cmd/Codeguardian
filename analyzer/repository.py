@@ -98,16 +98,9 @@ def _normalize_repository_string(path: str | Path) -> str:
 def normalize_repository_path(path: str | Path) -> Path:
     raw_text = _normalize_repository_string(path)
 
-    # Windows-style absolute paths (C:\... or \\server\...) cannot be resolved
-    # when the server is running on Linux (e.g. deployed to Render).
-    # Tell the user to provide a public GitHub URL instead.
     if _looks_like_windows_absolute(raw_text):
-        if os.name != "nt":
-            raise ValueError(
-                "Local Windows paths are not accessible from the cloud deployment. "
-                "Please provide a public GitHub URL instead, "
-                "e.g. https://github.com/owner/repo"
-            )
+        # On Windows, resolve directly. On Linux/cloud, it won't exist and
+        # validate_repository_path will return a clear "path does not exist" error.
         candidate = Path(raw_text).expanduser()
     elif os.path.isabs(raw_text):
         candidate = Path(raw_text).expanduser()

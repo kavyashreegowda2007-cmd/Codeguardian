@@ -135,7 +135,7 @@ export function RepositoryView({ request, setRequest, repositoryPath, setReposit
             className="form-input"
             value={repositoryPath}
             onChange={e => setRepositoryPath(e.target.value)}
-            placeholder="https://github.com/owner/repo  or  /local/path"
+            placeholder="https://github.com/owner/repo  or  sample-project  or  /local/path"
             aria-required="true"
           />
           <div style={{ fontSize: 11, color: "var(--color-text-secondary)", marginTop: 6, fontFamily: "'DM Mono', monospace" }}>
