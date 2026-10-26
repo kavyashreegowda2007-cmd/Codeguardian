@@ -4,8 +4,11 @@ WORKDIR /frontend
 COPY frontend/package.json frontend/package-lock.json* ./
 RUN npm install
 COPY frontend/ ./
-# Backend URL is the same origin (single service), so use relative /api path.
-# We override the full API constant in main.tsx via the fallback default.
+# When deployed on Render, frontend and backend share the same origin,
+# so relative /api paths work — VITE_API_URL defaults to "" (empty = same origin).
+# Pass VITE_API_URL as a build arg to override for split deployments.
+ARG VITE_API_URL=""
+ENV VITE_API_URL=$VITE_API_URL
 RUN npm run build
 
 # ── Stage 2: Python backend + bundled frontend ───────────────────────────────
